@@ -1,0 +1,31 @@
+# ==============================================================================
+# Lyftr AI Chatbot - Docker Compose (SCAFFOLD)
+# Note: This is an initial configuration scaffold.
+# Full multi-stage build definitions will be implemented in subsequent steps.
+# ==============================================================================
+
+version: '3.8'
+
+# Planned services:
+# 1. backend:
+#    - Build: ./backend (multi-stage Dockerfile)
+#    - Ports: "8000:8000"
+#    - Volumes: sqlite_data:/data
+#    - Environment: loaded from .env
+#
+# 2. frontend:
+#    - Build: ./frontend (multi-stage Dockerfile with Nginx runtime)
+#    - Ports: "3000:3000"
+#    - Depends on: backend
+
+services:
+  # Placeholder scaffold - will be enabled upon containerization step
+  backend-placeholder:
+    image: hello-world
+    profiles:
+      - scaffold
+
+# Planned named volume to persist SQLite across container restarts
+volumes:
+  sqlite_data:
+    name: lyftr_sqlite_data
