@@ -30,10 +30,14 @@ class Settings(BaseSettings):
     )
 
     def get_allowed_origins(self) -> List[str]:
-        """Parse ALLOWED_ORIGINS into a clean list of URLs."""
+        """Parse ALLOWED_ORIGINS into a clean list of URLs without trailing slashes."""
         if not self.ALLOWED_ORIGINS:
             return ["*"]
-        return [origin.strip() for origin in self.ALLOWED_ORIGINS.split(",") if origin.strip()]
+        return [
+            origin.strip().rstrip("/")
+            for origin in self.ALLOWED_ORIGINS.split(",")
+            if origin.strip()
+        ]
 
     def get_key_pool(self) -> List[str]:
         """Parse LLM_API_KEYS into a list of configured API keys."""
