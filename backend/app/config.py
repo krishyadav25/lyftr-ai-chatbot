@@ -1,6 +1,14 @@
 import os
+from pathlib import Path
 from typing import List
+from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Ensure the root .env at D:\lyftr-ai-chatbot\.env is loaded regardless of current working directory
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+ROOT_ENV_PATH = ROOT_DIR / ".env"
+if ROOT_ENV_PATH.exists():
+    load_dotenv(dotenv_path=ROOT_ENV_PATH, override=False)
 
 
 class Settings(BaseSettings):
@@ -12,10 +20,11 @@ class Settings(BaseSettings):
     LLM_API_KEYS: str = ""
     PORT: int = 8000
     HOST: str = "0.0.0.0"
-    LLM_MODEL: str = "gemini/gemini-2.0-flash"
+    LLM_MODEL: str = "gemini/gemini-2.5-flash"
+    DEFAULT_SYSTEM_PROMPT: str = "You are a helpful and concise AI assistant."
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(str(ROOT_ENV_PATH), ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )

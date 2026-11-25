@@ -8,8 +8,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.database import check_db_health, get_session_messages, init_db
+from app.database import add_message, check_db_health, get_session_messages, init_db
+from app.llm_service import (
+    LLMServiceError,
+    init_llm_cache,
+    is_cache_enabled,
+    llm_service,
+    parse_simulate_failure_header,
+)
 from app.schemas import (
+    AssistantMetadata,
     ChatRequest,
     ChatResponse,
     HealthResponse,
@@ -19,8 +27,9 @@ from app.schemas import (
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize database tables on startup."""
+    """Initialize database tables and LiteLLM response cache on startup."""
     await init_db()
+    init_llm_cache()
     yield
 
 
@@ -85,6 +94,7 @@ async def health_check():
     db_ok = await check_db_health()
     keys = settings.get_key_pool()
     keys_count = len(keys)
+    cache_ok = is_cache_enabled()
 
     # Health check requires reachable database and at least 2 configured keys
     if not db_ok or keys_count < 2:
@@ -93,7 +103,7 @@ async def health_check():
             content={
                 "status": "unhealthy",
                 "keys_configured": keys_count,
-                "cache_enabled": False,
+                "cache_enabled": cache_ok,
                 "detail": (
                     "Database unreachable"
                     if not db_ok
@@ -105,7 +115,7 @@ async def health_check():
     return HealthResponse(
         status="ok",
         keys_configured=keys_count,
-        cache_enabled=True,
+        cache_enabled=cache_ok,
     )
 
 
@@ -128,15 +138,66 @@ async def chat_endpoint(
 ):
     """
     POST /chat endpoint.
-    In Step 2: Validates the request, reads headers, and enforces failure handling.
-    Until the LiteLLM gateway service is integrated in Step 3, returns 503 without storing
-    any failed messages in the session history.
+    Retrieves previous session messages from SQLite, constructs the conversation prompt,
+    invokes Gemini through LiteLLM with key failover and built-in caching, and persists
+    both turns on success. Guarantees failed requests (422 or 503) are never saved.
     """
-    # Clean service boundary: LiteLLM gateway integration will be attached here.
-    # Note: Requests that fail (422 or 503) MUST NOT be added to session history.
-    raise HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail="all providers unavailable",
+    try:
+        simulated_failures = parse_simulate_failure_header(x_simulate_failure)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        )
+
+    session_id = request.session_id
+
+    # 1. Fetch existing session conversation history from SQLite
+    previous_messages = await get_session_messages(session_id)
+
+    # 2. Determine effective system prompt
+    effective_system_prompt = request.system_prompt or settings.DEFAULT_SYSTEM_PROMPT
+
+    # 3. Construct the model message list
+    llm_messages = [{"role": "system", "content": effective_system_prompt}]
+    for msg in previous_messages:
+        llm_messages.append({"role": msg["role"], "content": msg["content"]})
+    llm_messages.append({"role": "user", "content": request.message})
+
+    # 4. Invoke LLM service via LiteLLM
+    try:
+        result = await llm_service.generate_reply(
+            messages=llm_messages,
+            simulated_failures=simulated_failures,
+        )
+    except LLMServiceError:
+        # Failed requests must never mutate or create partial session history
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="all providers unavailable",
+        )
+
+    reply_text = result["reply"]
+    metadata_dict = result["metadata"]
+
+    # 5. Persist user and assistant messages into SQLite only after successful completion
+    await add_message(
+        session_id=session_id,
+        role="user",
+        content=request.message,
+        metadata=None,
+    )
+    await add_message(
+        session_id=session_id,
+        role="assistant",
+        content=reply_text,
+        metadata=metadata_dict,
+    )
+
+    return ChatResponse(
+        session_id=session_id,
+        reply=reply_text,
+        metadata=AssistantMetadata(**metadata_dict),
     )
 
 
